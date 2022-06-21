@@ -18,7 +18,7 @@
 
 
 
-#define PLUGIN_VERSION 		"1.15"
+#define PLUGIN_VERSION 		"1.16"
 
 /*=======================================================================================
 	Plugin Info:
@@ -31,6 +31,11 @@
 
 ========================================================================================
 	Change Log:
+
+1.16 (21-June-2022)
+	- Changed cvar "l4d_barricade_types" to allow building barricades where Saferoom Doors fall. Requires plugin the "Saferoom Door Spam Protection" with auto fall enabled.
+	- L4D1: Fixed the progress bar not displaying.
+	- L4D1: Fixed the barricades falling. Thanks to "CrazMan" for reporting.
 
 1.15 (21-June-2022)
 	- New feature: Building barricades on breakable walls!
@@ -133,6 +138,18 @@ enum // m_eDoorState
 	DOOR_STATE_CLOSING_IN_PROGRESS
 }
 
+// Thanks to "Dragokas":
+enum // m_spawnflags
+{
+	DOOR_FLAG_STARTS_OPEN		= 1,
+	DOOR_FLAG_STARTS_LOCKED		= 2048,
+	DOOR_FLAG_SILENT			= 4096,
+	DOOR_FLAG_USE_CLOSES		= 8192,
+	DOOR_FLAG_SILENT_NPC		= 16384,
+	DOOR_FLAG_IGNORE_USE		= 32768,
+	DOOR_FLAG_UNBREAKABLE		= 524288
+}
+
 enum
 {
 	TYPE_COMMON = 1,
@@ -146,6 +163,7 @@ enum
 	TYPE_DOORS = 1,
 	TYPE_WINDS,
 	TYPE_WALLS,
+	TYPE_SAFES,
 	TYPE_WINDS_BIG
 }
 
@@ -247,7 +265,7 @@ public void OnPluginStart()
 	g_hCvarTime =		CreateConVar(	"l4d_barricade_time",				"5",				"How long does it take to build 1 plank. Use whole numbers only, must be 1 or greater.", CVAR_FLAGS, true, 1.0 );
 	g_hCvarTimePress =	CreateConVar(	"l4d_barricade_time_press",			"0.3",				"How long must someone be holding +USE before building starts.", CVAR_FLAGS, true, 0.1 );
 	g_hCvarTimeWait =	CreateConVar(	"l4d_barricade_time_wait",			"0.5",				"How long after building a plank to make the player wait until they can build again.", CVAR_FLAGS, true, 0.1 );
-	g_hCvarType =		CreateConVar(	"l4d_barricade_types",				"7",				"1=Doors. 2=Windows. 4=Breakable Walls. 7=All. Where can barricades be built. Add numbers together.", CVAR_FLAGS );
+	g_hCvarType =		CreateConVar(	"l4d_barricade_types",				"7",				"1=Doors. 2=Windows. 4=Breakable Walls. 8=Saferoom Doors (requires \"Saferoom Door Spam Protection\" plugin with auto fall enabled). 15=All. Where can barricades be built. Add numbers together.", CVAR_FLAGS );
 	CreateConVar(						"l4d_barricade_version",			PLUGIN_VERSION,		"Barricades - Doors and Windows plugin version.", FCVAR_NOTIFY|FCVAR_DONTRECORD);
 	AutoExecConfig(true,				"l4d_barricade");
 
@@ -294,7 +312,6 @@ public void OnPluginStart()
 // ====================================================================================================
 public void OnMapStart()
 {
-	PrecacheModel(MODEL_DOOR);
 	PrecacheModel(MODEL_PLANK1);
 	PrecacheModel(MODEL_PLANK2);
 	PrecacheSound(SOUND_HAMMER1);
@@ -303,6 +320,8 @@ public void OnMapStart()
 
 	if( g_bLeft4Dead2 )
 	{
+		PrecacheModel(MODEL_DOOR);
+
 		// Find model for func_button_timed so the text displays
 		for( int i = 1; i <= 50; i++ )
 		{
@@ -583,6 +602,15 @@ void LateLoad()
 			{
 				SpawnPostWalls(entity);
 			}
+		}
+	}
+
+	if( g_iCvarType & TYPE_SAFES )
+	{
+		entity = -1;
+		while( (entity = FindEntityByClassname(entity, "prop_door_rotating_checkpoint")) != INVALID_ENT_REFERENCE )
+		{
+			SpawnPostSafes(entity);
 		}
 	}
 }
@@ -1258,7 +1286,12 @@ public void OnEntityCreated(int entity, const char[] classname)
 		{
 			SDKHook(entity, SDKHook_SpawnPost, SpawnPostWinds);
 		}
-		else if( g_hBreakable && g_iCvarType & TYPE_WALLS && (strcmp(classname, "func_breakable") == 0 || strcmp(classname, "prop_physics") == 0) )
+		else if( g_iCvarType & TYPE_SAFES && (strcmp(classname, "prop_door_rotating_checkpoint") == 0) )
+		{
+			SDKHook(entity, SDKHook_SpawnPost, SpawnPostSafes);
+		}
+
+		if( g_hBreakable && g_iCvarType & TYPE_WALLS && (strcmp(classname, "func_breakable") == 0 || strcmp(classname, "prop_physics") == 0) )
 		{
 			SDKHook(entity, SDKHook_SpawnPost, SpawnPostWalls);
 		}
@@ -1476,6 +1509,29 @@ void SpawnPostWalls(int entity)
 
 
 // ====================================================================================================
+//					SAFEROOM DOORS SPAWN
+// ====================================================================================================
+void SpawnPostSafes(int entity)
+{
+	// Store ref
+	g_iEnties[entity] = EntIndexToEntRef(entity);
+
+	// Save positions
+	float vAng[3], vPos[3];
+	GetEntPropVector(entity, Prop_Send, "m_vecOrigin", vPos);
+	GetEntPropVector(entity, Prop_Data, "m_angRotation", vAng);
+	vAng[1] -= 90.0;
+	vPos[2] -= 15.0;
+	vPos[2] -= 10000.0; // "Saferoom Door Spam Protection" plguin teleports the door up 10k, so account for this
+
+	g_vPos[entity] = vPos;
+	g_vAng[entity] = vAng;
+	g_iTypeProp[entity] = TYPE_SAFES;
+}
+
+
+
+// ====================================================================================================
 //					KEYBINDS
 // ====================================================================================================
 public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3], float angles[3], int &weapon)
@@ -1515,8 +1571,17 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 						// Barricade pos
 						if( g_vPos[i][0] && g_vPos[i][1] && g_vPos[i][2] )
 						{
-							// Custom location or prop is dead
-							if( i >= 2048 || (g_iEnties[i] && EntRefToEntIndex(g_iEnties[i]) == INVALID_ENT_REFERENCE && !IsValidEntRef(g_iRelative[i])) )
+							// Check type and if valid to build on
+							if(
+								// Custom location
+								i >= 2048 ||
+
+								// Saferoom door
+								(g_iTypeProp[i] == TYPE_SAFES && GetEntProp(i, Prop_Send, "m_eDoorState") == DOOR_STATE_CLOSING_IN_PROGRESS && GetEntProp(i, Prop_Send, "m_spawnflags") == DOOR_FLAG_SILENT|DOOR_FLAG_IGNORE_USE) ||
+
+								// Dead prop
+								(g_iEnties[i] && EntRefToEntIndex(g_iEnties[i]) == INVALID_ENT_REFERENCE && !IsValidEntRef(g_iRelative[i]))
+							)
 							{
 								dist = GetVectorDistance(vPos, g_vPos[i]);
 
@@ -1577,6 +1642,7 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 						else
 						{
 							SetEntPropString(client, Prop_Send, "m_progressBarText", "BUILDING BARRICADE...");
+							SetEntPropFloat(client, Prop_Send, "m_flProgressBarStartTime", GetGameTime());
 							SetEntProp(client, Prop_Send, "m_iProgressBarDuration", g_iCvarTime);
 						}
 
@@ -1599,10 +1665,10 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 							}
 							else
 							{
+								SetEntPropFloat(client, Prop_Send, "m_flProgressBarStartTime", GetGameTime());
 								SetEntPropString(client, Prop_Send, "m_progressBarText", "");
 								SetEntProp(client, Prop_Send, "m_iProgressBarDuration", 0);
 							}
-							SetEntPropFloat(client, Prop_Send, "m_flProgressBarStartTime", GetGameTime());
 							SetEntityMoveType(client, MOVETYPE_WALK);
 							BuildBarricade(index);
 						}
@@ -1626,10 +1692,10 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 			}
 			else
 			{
+				SetEntPropFloat(client, Prop_Send, "m_flProgressBarStartTime", GetGameTime());
 				SetEntPropString(client, Prop_Send, "m_progressBarText", "");
 				SetEntProp(client, Prop_Send, "m_iProgressBarDuration", 0);
 			}
-			SetEntPropFloat(client, Prop_Send, "m_flProgressBarStartTime", GetGameTime());
 			SetEntityMoveType(client, MOVETYPE_WALK);
 		}
 	}
@@ -1732,7 +1798,7 @@ void BuildBarricade(int index)
 		if( entity != -1 )
 		{
 			bool dbl_door;
-			bool is_door = g_iTypeProp[index] == TYPE_DOORS;
+			bool is_door = (g_iTypeProp[index] == TYPE_DOORS || g_iTypeProp[index] == TYPE_SAFES);
 
 			if( is_door )
 			{
@@ -1752,6 +1818,9 @@ void BuildBarricade(int index)
 
 			DispatchKeyValue(entity, "classname", "prop_door_rotating"); // SI Attacks
 			DispatchKeyValue(entity, "hammerid", "314"); // Prevent glow on these
+
+			if( !g_bLeft4Dead2 )
+				SetEntityMoveType(entity, MOVETYPE_NONE);
 
 			// Health
 			SetEntProp(entity, Prop_Data, "m_iHealth", g_iCvarHealth);
