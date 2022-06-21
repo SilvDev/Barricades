@@ -18,19 +18,27 @@
 
 
 
-#define PLUGIN_VERSION 		"1.14"
+#define PLUGIN_VERSION 		"1.15"
 
 /*=======================================================================================
 	Plugin Info:
 
 *	Name	:	[L4D & L4D2] Barricades - Doors and Windows
 *	Author	:	SilverShot
-*	Descrp	:	Allows Survivors to create Barricades in broken doorways and windows.
+*	Descrp	:	Allows Survivors to create Barricades in broken doorways, window frames and breakable walls.
 *	Link	:	https://forums.alliedmods.net/showthread.php?t=338054
 *	Plugins	:	https://sourcemod.net/plugins.php?exact=exact&sortby=title&search=1&author=Silvers
 
 ========================================================================================
 	Change Log:
+
+1.15 (21-June-2022)
+	- New feature: Building barricades on breakable walls!
+	- Data config updated adding barricades to many open doorways and breakable walls on all L4D2 official Valve maps.
+
+	- Added command "sm_barricade_reload" to reset the plugin and reload the data config.
+	- L4D2: Added command "sm_walls_glow" to show where breakable walls are. Note: this creates many "prop_physics" with door models for the glow.
+	- L4D1: Fixed the barricades falling to the ground. Thanks to "CrazMan" for reporting.
 
 1.14 (20-June-2022)
 	- Added a data config to specify positions where there are no doors to allow building barricades in that spot.
@@ -106,6 +114,7 @@
 
 #define CVAR_FLAGS			FCVAR_NOTIFY
 #define CONFIG_DATA			"data/l4d_barricade.cfg"
+#define MODEL_DOOR			"models/props_downtown/metal_door_112.mdl"
 #define MODEL_PLANK1		"models/props_debris/wood_board04a.mdl"
 #define MODEL_PLANK2		"models/props_debris/wood_board05a.mdl"
 #define SOUND_HAMMER1		"physics/wood/wood_box_impact_bullet1.wav"
@@ -136,20 +145,31 @@ enum
 {
 	TYPE_DOORS = 1,
 	TYPE_WINDS,
+	TYPE_WALLS,
 	TYPE_WINDS_BIG
+}
+
+enum
+{
+	INDEX_HAMMER = 0,
+	INDEX_TYPE,
+	INDEX_ANGLE,
 }
 
 ConVar g_hCvarAllow, g_hCvarMPGameMode, g_hCvarModes, g_hCvarModesOff, g_hCvarModesTog, g_hCvarDamageC, g_hCvarDamageI, g_hCvarDamageS, g_hCvarDamageT, g_hCvarFlags, g_hCvarHealth, g_hCvarKeys, g_hCvarRange, g_hCvarTime, g_hCvarTimePress, g_hCvarTimeWait, g_hCvarType;
 int g_iCvarDamageC, g_iCvarDamageI, g_iCvarDamageS, g_iCvarDamageT, g_iCvarFlags, g_iCvarHealth, g_iCvarKeys, g_iCvarTime, g_iCvarType;
 float g_fCvarRange, g_fCvarTimeWait, g_fCvarTimePress;
-bool g_bCvarAllow, g_bMapStarted, g_bLeft4Dead2, g_bDoubleDoorFix, g_bDoubleDoorMap, g_bCustomData;
+bool g_bCvarAllow, g_bMapStarted, g_bLeft4Dead2, g_bDoubleDoorFix, g_bDoubleDoorMap, g_bCustomData, g_bDoorsGlow, g_bWallsGlow, g_bWindsGlow;
 char g_sMod[4];
+
+ArrayList g_hBreakable;
 
 int g_iBarricade[4096][4];
 int g_iRelative[4096];
 int g_iRelIndex[4096];
 int g_iTypeProp[4096];
 int g_iEnties[4096];
+int g_iWallGlow[2048];
 float g_vAng[4096][3];
 float g_vPos[4096][3];
 float g_fPressing[MAXPLAYERS+1];
@@ -181,7 +201,7 @@ public Plugin myinfo =
 {
 	name = "[L4D & L4D2] Barricades - Doors and Windows",
 	author = "SilverShot",
-	description = "Allows Survivors to create Barricades in broken doorways and window frames.",
+	description = "Allows Survivors to create Barricades in broken doorways, window frames and breakable walls.",
 	version = PLUGIN_VERSION,
 	url = "https://forums.alliedmods.net/showthread.php?t=338054"
 }
@@ -227,7 +247,7 @@ public void OnPluginStart()
 	g_hCvarTime =		CreateConVar(	"l4d_barricade_time",				"5",				"How long does it take to build 1 plank. Use whole numbers only, must be 1 or greater.", CVAR_FLAGS, true, 1.0 );
 	g_hCvarTimePress =	CreateConVar(	"l4d_barricade_time_press",			"0.3",				"How long must someone be holding +USE before building starts.", CVAR_FLAGS, true, 0.1 );
 	g_hCvarTimeWait =	CreateConVar(	"l4d_barricade_time_wait",			"0.5",				"How long after building a plank to make the player wait until they can build again.", CVAR_FLAGS, true, 0.1 );
-	g_hCvarType =		CreateConVar(	"l4d_barricade_types",				"3",				"1=Doors. 2=Windows. 3=Both. Where can barricades be built.", CVAR_FLAGS );
+	g_hCvarType =		CreateConVar(	"l4d_barricade_types",				"7",				"1=Doors. 2=Windows. 4=Breakable Walls. 7=All. Where can barricades be built. Add numbers together.", CVAR_FLAGS );
 	CreateConVar(						"l4d_barricade_version",			PLUGIN_VERSION,		"Barricades - Doors and Windows plugin version.", FCVAR_NOTIFY|FCVAR_DONTRECORD);
 	AutoExecConfig(true,				"l4d_barricade");
 
@@ -253,389 +273,18 @@ public void OnPluginStart()
 	// Commands
 	if( g_bLeft4Dead2 && CommandExists("sm_doors_glow") == false ) // Shared with "Lock Doors" plugin
 	{
-		RegAdminCmd("sm_doors_glow", CmdDoorsGlow, ADMFLAG_ROOT, "Debug testing command to show all doors.");
+		RegAdminCmd("sm_doors_glow",	CmdDoorsGlow,	ADMFLAG_ROOT, "Debug testing command to show all doors.");
 	}
 
-	RegAdminCmd("sm_winds_glow", CmdWindsGlow, ADMFLAG_ROOT, "Debug testing command to show all windows.");
-
-	RegAdminCmd("sm_barricade_add", CmdAdd, ADMFLAG_ROOT, "Adds a place to barricades to the data config. Put your back to one side and face the other, step forward sightly and run the command. Usage: sm_barricade_add [plank type: 1=Small, 2=Large]");
-	RegAdminCmd("sm_barricade_del", CmdDel, ADMFLAG_ROOT, "Deletes a data config entry when nearby to the position it's saved. Must be next to the one of the frame sides.");
-}
-
-
-
-// ====================================================================================================
-//					PLUGIN END
-// ====================================================================================================
-public void OnPluginEnd()
-{
-	ResetPlugin();
-}
-
-void ResetPlugin()
-{
-	// Reset client arrays, progress bar and movement
-	for( int i = 1; i <= MaxClients; i++ )
+	if( g_bLeft4Dead2 )
 	{
-		RemoveButton(i);
-
-		if( g_iPressing[i] && IsClientInGame(i) )
-		{
-			if( !g_bLeft4Dead2 )
-			{
-				SetEntPropString(i, Prop_Send, "m_progressBarText", "");
-				SetEntPropFloat(i, Prop_Send, "m_flProgressBarStartTime", GetGameTime());
-				SetEntProp(i, Prop_Send, "m_iProgressBarDuration", 0);
-			}
-
-			SetEntityMoveType(i, MOVETYPE_WALK);
-		}
-
-		g_iPressing[i] = 0;
-		g_fPressing[i] = 0.0;
-		g_fTimeout[i] = 0.0;
-		g_fTimePress[i] = 0.0;
-		g_fTimeSound[i] = 0.0;
+		RegAdminCmd("sm_winds_glow",	CmdWindsGlow,	ADMFLAG_ROOT, "Debug testing command to show all windows.");
+		RegAdminCmd("sm_walls_glow",	CmdWallsGlow,	ADMFLAG_ROOT, "Debug testing command to show all breakable walls. This creates many entities to show the glow.");
 	}
 
-	// Reset entity arrays, delete planks
-	int entity;
-
-	for( int i = 0; i < 4096; i++ )
-	{
-		g_vAng[i] = view_as<float>({ 0.0, 0.0, 0.0 });
-		g_vPos[i] = view_as<float>({ 0.0, 0.0, 0.0 });
-		g_iEnties[i] = 0;
-		g_iRelative[i] = 0;
-		g_iRelIndex[i] = 0;
-		g_iTypeProp[i] = 0;
-
-		for( int x = 0; x < 4; x++ )
-		{
-			entity = g_iBarricade[i][x];
-			if( entity && EntRefToEntIndex(entity) != INVALID_ENT_REFERENCE )
-			{
-				RemoveEntity(entity);
-			}
-
-			g_iBarricade[i][x] = 0;
-		}
-	}
-}
-
-
-
-// ====================================================================================================
-//					COMMANDS - GLOW
-// ====================================================================================================
-bool g_bDoorsGlow;
-Action CmdDoorsGlow(int client, int args)
-{
-	g_bDoorsGlow = !g_bDoorsGlow;
-
-	int entity = -1;
-	while( (entity = FindEntityByClassname(entity, "prop_door_rotating")) != INVALID_ENT_REFERENCE )
-	{
-		SetEntProp(entity, Prop_Send, "m_iGlowType", 3);
-		SetEntProp(entity, Prop_Send, "m_glowColorOverride", 255);
-		SetEntProp(entity, Prop_Send, "m_nGlowRange", g_bDoorsGlow ? 0 : 9999);
-		SetEntProp(entity, Prop_Send, "m_nGlowRangeMin", 20);
-		if( g_bDoorsGlow )
-			AcceptEntityInput(entity, "StartGlowing");
-		else
-			AcceptEntityInput(entity, "StopGlowing");
-	}
-
-	return Plugin_Handled;
-}
-
-bool g_bWindsGlow;
-Action CmdWindsGlow(int client, int args)
-{
-	g_bWindsGlow = !g_bWindsGlow;
-
-	static char sModel[128];
-
-	int entity = -1;
-	while( (entity = FindEntityByClassname(entity, "prop_physics")) != INVALID_ENT_REFERENCE )
-	{
-		GetEntPropString(entity, Prop_Data, "m_ModelName", sModel, sizeof(sModel));
-
-		if(
-			strcmp(sModel, "models/props/cs_militia/militiawindow02_breakable.mdl", false) == 0 ||
-			strcmp(sModel, "models/props_windows/window_farmhouse_small.mdl", false) == 0 ||
-			strcmp(sModel, "models/props_windows/window_industrial.mdl", false) == 0 ||
-			strcmp(sModel, "models/props_windows/window_urban_apt.mdl", false) == 0 ||
-			strcmp(sModel, "models/props_windows/window_farmhouse_big.mdl", false) == 0
-		)
-		{
-			SetEntProp(entity, Prop_Send, "m_iGlowType", 3);
-			SetEntProp(entity, Prop_Send, "m_glowColorOverride", 255);
-			SetEntProp(entity, Prop_Send, "m_nGlowRange", g_bWindsGlow ? 0 : 9999);
-			SetEntProp(entity, Prop_Send, "m_nGlowRangeMin", 20);
-			if( g_bWindsGlow )
-				AcceptEntityInput(entity, "StartGlowing");
-			else
-				AcceptEntityInput(entity, "StopGlowing");
-		}
-	}
-
-	return Plugin_Handled;
-}
-
-
-
-// ====================================================================================================
-//					COMMANDS - ADD / DELETE
-// ====================================================================================================
-Action CmdAdd(int client, int args)
-{
-	if( !g_bCvarAllow )
-	{
-		ReplyToCommand(client, "[SM] Plugin turned off.");
-		return Plugin_Handled;
-	}
-
-	if( !client )
-	{
-		ReplyToCommand(client, "[Barricades] Command can only be used %s", IsDedicatedServer() ? "in game on a dedicated server." : "in chat on a Listen server.");
-		return Plugin_Handled;
-	}
-
-	char sPath[PLATFORM_MAX_PATH];
-	BuildPath(Path_SM, sPath, sizeof(sPath), CONFIG_DATA);
-	if( !FileExists(sPath) )
-	{
-		File hCfg = OpenFile(sPath, "w");
-		hCfg.WriteLine("");
-		delete hCfg;
-		return Plugin_Handled;
-	}
-
-	// Load config
-	KeyValues hFile = new KeyValues("barricades");
-	if( !hFile.ImportFromFile(sPath) )
-	{
-		PrintToChat(client, "\x04[Barricades] \x01Error: Cannot read the Barricades config, assuming empty file. (\x05%s\x01).", sPath);
-	}
-
-	// Check for current map in the config
-	char sMap[64];
-	GetCurrentMap(sMap, sizeof(sMap));
-	if( !hFile.JumpToKey(sMap, true) )
-	{
-		PrintToChat(client, "\x04[Barricades] \x01Error: Failed to add map to the Barricades data config.");
-		delete hFile;
-		return Plugin_Handled;
-	}
-
-	int index = 1;
-	while( index )
-	{
-		IntToString(index, sMap, sizeof(sMap));
-
-		if( KvJumpToKey(hFile, sMap) )
-		{
-			index++;
-			hFile.GoBack();
-		} else {
-			break;
-		}
-	}
-
-	index += 2048;
-	g_bCustomData = true;
-
-	// Create entry
-	KvJumpToKey(hFile, sMap, true);
-
-	// Save data
-	float vPos[3];
-
-	// Pos
-	GetClientAbsOrigin(client, vPos);
-	vPos[2] += 40.0;
-	hFile.SetVector("pos", vPos);
-	g_vPos[index] = vPos;
-
-	// Ang
-	GetClientEyeAngles(client, vPos);
-	vPos[0] = 0.0;
-	vPos[1] -= 180.0;
-	vPos[2] = 0.0;
-	hFile.SetFloat("ang", vPos[1]);
-	g_vAng[index] = vPos;
-
-	// Type
-	int type = 1;
-
-	if( args )
-	{
-		GetCmdArg(1, sMap, sizeof(sMap));
-		type = StringToInt(sMap);
-	}
-
-	if( type == 2 )
-	{
-		g_iTypeProp[index] = TYPE_DOORS;
-		g_iRelative[index] = index - 2048;
-	}
-
-	hFile.SetNum("type", type);
-
-	// Save cfg
-	hFile.Rewind();
-	hFile.ExportToFile(sPath);
-	delete hFile;
-
-	PrintToChat(client, "\x04[Barricades] \x01Saved new index \x05%d\x01.", index - 2048);
-
-	return Plugin_Handled;
-}
-
-Action CmdDel(int client, int args)
-{
-	if( !g_bCvarAllow )
-	{
-		ReplyToCommand(client, "[SM] Plugin turned off.");
-		return Plugin_Handled;
-	}
-
-	if( !client )
-	{
-		ReplyToCommand(client, "[Barricades] Command can only be used %s", IsDedicatedServer() ? "in game on a dedicated server." : "in chat on a Listen server.");
-		return Plugin_Handled;
-	}
-
-	int index;
-
-	float vPos[3];
-	GetClientAbsOrigin(client, vPos);
-
-
-	// Loop props
-	for( int i = 2049; i < 4096; i++ )
-	{
-		// Prop pos
-		if( g_vPos[i][0] && g_vPos[i][1] && g_vPos[i][2] )
-		{
-			if( GetVectorDistance(vPos, g_vPos[i]) <= 100.0 )
-			{
-				index = i;
-				break;
-			}
-		}
-	}
-
-	if( index == 0 )
-	{
-		PrintToChat(client, "\x04[Barricades] \x01Cannot find a nearby Barricade index. Move closer to the frame or try the other side.", index);
-		return Plugin_Handled;
-	}
-
-	// Load config
-	char sPath[PLATFORM_MAX_PATH];
-	BuildPath(Path_SM, sPath, sizeof(sPath), CONFIG_DATA);
-	if( !FileExists(sPath) )
-	{
-		PrintToChat(client, "\x04[Barricades] Warning: Cannot find the data config (\x05%s\x01).", CONFIG_DATA);
-		return Plugin_Handled;
-	}
-
-	KeyValues hFile = new KeyValues("barricades");
-	if( !hFile.ImportFromFile(sPath) )
-	{
-		PrintToChat(client, "\x04[Barricades] Warning: Cannot load the data config (\x05%s\x01).", sPath);
-		delete hFile;
-		return Plugin_Handled;
-	}
-
-	// Check for current map in the config
-	char sMap[64];
-	GetCurrentMap(sMap, sizeof(sMap));
-
-	if( !hFile.JumpToKey(sMap) )
-	{
-		PrintToChat(client, "\x04[Barricades] Warning: Current map not in the data config.");
-		delete hFile;
-		return Plugin_Handled;
-	}
-
-	bool bMove;
-	char sTemp[4];
-	int i = index - 2048;
-
-	// Move the other entries down
-	while( index )
-	{
-		IntToString(i, sTemp, sizeof(sTemp));
-
-		if( hFile.JumpToKey(sTemp) )
-		{
-			if( !bMove )
-			{
-				bMove = true;
-				hFile.DeleteThis();
-
-				// Delete barricades
-				int entity;
-
-				for( int x = 0; x < 4; x++ )
-				{
-					entity = g_iBarricade[index][x];
-					if( entity && EntRefToEntIndex(entity) != INVALID_ENT_REFERENCE )
-					{
-						RemoveEntity(entity);
-					}
-				}
-			}
-			else
-			{
-				IntToString(i - 1, sTemp, sizeof(sTemp));
-				hFile.SetSectionName(sTemp);
-				hFile.GoBack();
-			}
-
-			i++;
-			hFile.Rewind();
-			hFile.JumpToKey(sMap);
-		}
-		else
-		{
-			break;
-		}
-
-		// Move array indexes
-		for( int x = 0; x < 4; x++ )
-		{
-			g_iBarricade[2048 + i - 1][x] = g_iBarricade[2048 + i][x];
-		}
-
-		g_vPos[2048 + i - 1] = g_vPos[2048 + i];
-		g_vAng[2048 + i - 1] = g_vAng[2048 + i];
-		g_iTypeProp[2048 + i - 1] = g_iTypeProp[2048 + i];
-		g_iRelative[2048 + i - 1] = g_iRelative[2048 + i];
-
-		g_vPos[2048 + i] = view_as<float>({ 0.0, 0.0, 0.0 });
-		g_vAng[2048 + i] = view_as<float>({ 0.0, 0.0, 0.0 });
-		g_iTypeProp[2048 + i] = 0;
-		g_iRelative[2048 + i] = 0;
-	}
-
-	if( bMove )
-	{
-		// Save to file
-		hFile.Rewind();
-		hFile.ExportToFile(sPath);
-
-		PrintToChat(client, "\x01\x04[Barricades] \x01Deleted index \x05%d \x01from the data config.", index - 2048);
-	}
-	else
-	{
-		PrintToChat(client, "\x01\x04[Barricades] \x01Failed to delete index \x05%d \x01from the data config.", index - 2048);
-	}
-
-	return Plugin_Handled;
+	RegAdminCmd("sm_barricade_add",		CmdAdd,			ADMFLAG_ROOT, "Adds a place for barricades to the data config. Usage: sm_barricade_add <plank type: -1=Small breakable (aim at wall). -2=Large breakable (aim at wall). 1=Small planks (back to wall), 2=Large planks (back to wall)>.");
+	RegAdminCmd("sm_barricade_del",		CmdDel,			ADMFLAG_ROOT, "Deletes a data config entry when nearby to the position it's saved. Must be next to the one of the frame sides.");
+	RegAdminCmd("sm_barricade_reload",	CmdRel,			ADMFLAG_ROOT, "Resets the plugin and reloads the data config.");
 }
 
 
@@ -645,8 +294,7 @@ Action CmdDel(int client, int args)
 // ====================================================================================================
 public void OnMapStart()
 {
-	g_bMapStarted = true;
-
+	PrecacheModel(MODEL_DOOR);
 	PrecacheModel(MODEL_PLANK1);
 	PrecacheModel(MODEL_PLANK2);
 	PrecacheSound(SOUND_HAMMER1);
@@ -671,62 +319,15 @@ public void OnMapStart()
 		}
 	}
 
+	// Config
+	LoadConfig();
 
-
-	// =========================
-	// Load config
-	// =========================
-	g_bCustomData = false;
-
-	char sPath[PLATFORM_MAX_PATH];
-	BuildPath(Path_SM, sPath, sizeof(sPath), CONFIG_DATA);
-
-	if( FileExists(sPath) )
+	if( g_bCvarAllow )
 	{
-		KeyValues hFile = new KeyValues("barricades");
-		if( !hFile.ImportFromFile(sPath) )
-		{
-			delete hFile;
-			return;
-		}
-
-		// Check for current map in the config
-		char sMap[64];
-		GetCurrentMap(sMap, sizeof(sMap));
-
-		if( !hFile.JumpToKey(sMap) )
-		{
-			delete hFile;
-			return;
-		}
-
-		g_bCustomData = true;
-
-		int index = 1;
-		while( index > 0 )
-		{
-			IntToString(index, sMap, sizeof(sMap));
-
-			if( KvJumpToKey(hFile, sMap) )
-			{
-				hFile.GetVector("pos", g_vPos[2048 + index]);
-				g_vAng[2048 + index][1] = hFile.GetFloat("ang");
-
-				if( hFile.GetNum("type") == 2 ) // Large model
-				{
-					g_iTypeProp[2048 + index] = TYPE_DOORS;
-					g_iRelative[2048 + index] = index;
-				}
-
-				hFile.GoBack();
-				index++;
-			} else {
-				index = 0;
-			}
-		}
-
-		delete hFile;
+		LateLoad();
 	}
+
+	g_bMapStarted = true;
 }
 
 public void OnMapEnd()
@@ -734,6 +335,7 @@ public void OnMapEnd()
 	g_bDoubleDoorMap = false;
 	g_bDoorsGlow = false;
 	g_bWindsGlow = false;
+	g_bWallsGlow = false;
 	g_bMapStarted = false;
 
 	ResetPlugin();
@@ -784,23 +386,7 @@ void IsAllowed()
 
 		HookEvent("round_end",			Event_RoundEnd,		EventHookMode_PostNoCopy);
 
-		int entity = -1;
-		if( g_iCvarType & TYPE_DOORS )
-		{
-			while( (entity = FindEntityByClassname(entity, "prop_door_rotating")) != INVALID_ENT_REFERENCE )
-			{
-				SpawnPostDoors(entity);
-			}
-		}
-
-		entity = -1;
-		if( g_iCvarType & TYPE_WINDS )
-		{
-			while( (entity = FindEntityByClassname(entity, "prop_physics")) != INVALID_ENT_REFERENCE )
-			{
-				SpawnPostWinds(entity);
-			}
-		}
+		LateLoad();
 	}
 	else if( g_bCvarAllow == true && (bCvarAllow == false || bAllowMode == false) )
 	{
@@ -885,6 +471,749 @@ void OnGamemode(const char[] output, int caller, int activator, float delay)
 
 
 // ====================================================================================================
+//					PLUGIN END
+// ====================================================================================================
+public void OnPluginEnd()
+{
+	ResetPlugin();
+}
+
+void ResetPlugin()
+{
+	// Reset client arrays, progress bar and movement
+	for( int i = 1; i <= MaxClients; i++ )
+	{
+		RemoveButton(i);
+
+		if( g_iPressing[i] && IsClientInGame(i) )
+		{
+			if( !g_bLeft4Dead2 )
+			{
+				SetEntPropString(i, Prop_Send, "m_progressBarText", "");
+				SetEntPropFloat(i, Prop_Send, "m_flProgressBarStartTime", GetGameTime());
+				SetEntProp(i, Prop_Send, "m_iProgressBarDuration", 0);
+			}
+
+			SetEntityMoveType(i, MOVETYPE_WALK);
+		}
+
+		g_iPressing[i] = 0;
+		g_fPressing[i] = 0.0;
+		g_fTimeout[i] = 0.0;
+		g_fTimePress[i] = 0.0;
+		g_fTimeSound[i] = 0.0;
+	}
+
+	// Reset entity arrays, delete planks
+	int entity;
+
+	for( int i = 0; i < 2048; i++ )
+	{
+		entity = g_iWallGlow[i];
+		g_iWallGlow[i] = 0;
+
+		if( entity && EntRefToEntIndex(entity) != INVALID_ENT_REFERENCE )
+		{
+			RemoveEntity(entity);
+		}
+	}
+
+	for( int i = 0; i < 4096; i++ )
+	{
+		g_vAng[i] = view_as<float>({ 0.0, 0.0, 0.0 });
+		g_vPos[i] = view_as<float>({ 0.0, 0.0, 0.0 });
+		g_iEnties[i] = 0;
+		g_iRelative[i] = 0;
+		g_iRelIndex[i] = 0;
+		g_iTypeProp[i] = 0;
+
+		for( int x = 0; x < 4; x++ )
+		{
+			entity = g_iBarricade[i][x];
+			if( entity && EntRefToEntIndex(entity) != INVALID_ENT_REFERENCE )
+			{
+				RemoveEntity(entity);
+			}
+
+			g_iBarricade[i][x] = 0;
+		}
+	}
+}
+
+
+
+// ====================================================================================================
+//					LATE LOAD
+// ====================================================================================================
+void LateLoad()
+{
+	int entity = -1;
+	if( g_iCvarType & TYPE_DOORS )
+	{
+		while( (entity = FindEntityByClassname(entity, "prop_door_rotating")) != INVALID_ENT_REFERENCE )
+		{
+			SpawnPostDoors(entity);
+		}
+	}
+
+	if( g_iCvarType & TYPE_WINDS )
+	{
+		entity = -1;
+		while( (entity = FindEntityByClassname(entity, "prop_physics")) != INVALID_ENT_REFERENCE )
+		{
+			SpawnPostWinds(entity);
+		}
+	}
+
+	if( g_hBreakable && g_iCvarType & TYPE_WALLS )
+	{
+		entity = -1;
+		while( (entity = FindEntityByClassname(entity, "func_breakable")) != INVALID_ENT_REFERENCE )
+		{
+			if( g_hBreakable.FindValue(GetEntProp(entity, Prop_Data, "m_iHammerID"), INDEX_HAMMER) != -1 )
+			{
+				SpawnPostWalls(entity);
+			}
+		}
+
+		entity = -1;
+		while( (entity = FindEntityByClassname(entity, "prop_physics")) != INVALID_ENT_REFERENCE )
+		{
+			if( g_hBreakable.FindValue(GetEntProp(entity, Prop_Data, "m_iHammerID"), INDEX_HAMMER) != -1 )
+			{
+				SpawnPostWalls(entity);
+			}
+		}
+	}
+}
+
+
+
+// ====================================================================================================
+//					LOAD CONFIG
+// ====================================================================================================
+void LoadConfig()
+{
+	delete g_hBreakable;
+
+	g_bCustomData = false;
+
+	char sPath[PLATFORM_MAX_PATH];
+	BuildPath(Path_SM, sPath, sizeof(sPath), CONFIG_DATA);
+
+	if( FileExists(sPath) )
+	{
+		KeyValues hFile = new KeyValues("barricades");
+		if( !hFile.ImportFromFile(sPath) )
+		{
+			delete hFile;
+			return;
+		}
+
+		// Check for current map in the config
+		char sMap[64];
+		GetCurrentMap(sMap, sizeof(sMap));
+
+		if( !hFile.JumpToKey(sMap) )
+		{
+			delete hFile;
+			return;
+		}
+
+		g_hBreakable = new ArrayList(4);
+		g_bCustomData = true;
+
+		int type;
+		int angle;
+		int entry;
+		int index = 1;
+		int hammer;
+		while( index > 0 )
+		{
+			IntToString(index, sMap, sizeof(sMap));
+
+			if( KvJumpToKey(hFile, sMap) )
+			{
+				type = hFile.GetNum("type");
+
+				// Get breakable walls
+				if( type == -1 )
+				{
+					hammer = hFile.GetNum("hammer");
+					angle = hFile.GetNum("angle");
+
+					entry = g_hBreakable.Push(hammer);
+					g_hBreakable.Set(entry, -1, INDEX_TYPE);
+					g_hBreakable.Set(entry, angle, INDEX_ANGLE);
+
+					g_iTypeProp[2048 + index] = TYPE_DOORS;
+					g_iRelative[2048 + index] = index;
+				}
+				if( type == -2 )
+				{
+					hammer = hFile.GetNum("hammer");
+					angle = hFile.GetNum("angle");
+
+					entry = g_hBreakable.Push(hammer);
+					g_hBreakable.Set(entry, -2, INDEX_TYPE);
+					g_hBreakable.Set(entry, angle, INDEX_ANGLE);
+
+					g_iTypeProp[2048 + index] = TYPE_DOORS;
+					g_iRelative[2048 + index] = index;
+				}
+				// Get custom door/window frame positions
+				else
+				{
+					if( type == 2 ) // Large model
+					{
+						g_iTypeProp[2048 + index] = TYPE_DOORS;
+						g_iRelative[2048 + index] = index;
+					}
+
+					hFile.GetVector("pos", g_vPos[2048 + index]);
+					g_vAng[2048 + index][1] = hFile.GetFloat("ang");
+				}
+
+				hFile.GoBack();
+				index++;
+			} else {
+				index = 0;
+			}
+		}
+
+		delete hFile;
+	}
+}
+
+
+
+// ====================================================================================================
+//					COMMANDS - GLOW
+// ====================================================================================================
+Action CmdDoorsGlow(int client, int args)
+{
+	if( !client )
+	{
+		ReplyToCommand(client, "[Barricades] Command can only be used %s", IsDedicatedServer() ? "in game on a dedicated server." : "in chat on a Listen server.");
+		return Plugin_Handled;
+	}
+
+	g_bDoorsGlow = !g_bDoorsGlow;
+
+	int entity = -1;
+	while( (entity = FindEntityByClassname(entity, "prop_door_rotating")) != INVALID_ENT_REFERENCE )
+	{
+		if( GetEntProp(entity, Prop_Data, "m_iHammerID") != 314 ) // Ignore these, they are planks
+		{
+			SetEntProp(entity, Prop_Send, "m_iGlowType", 3);
+			SetEntProp(entity, Prop_Send, "m_glowColorOverride", 255);
+			SetEntProp(entity, Prop_Send, "m_nGlowRange", 9999);
+			SetEntProp(entity, Prop_Send, "m_nGlowRangeMin", 20);
+			if( g_bDoorsGlow )
+				AcceptEntityInput(entity, "StartGlowing");
+			else
+				AcceptEntityInput(entity, "StopGlowing");
+		}
+	}
+
+	PrintToChat(client, "\x04[Barricades] \x01Doors glow turned: \x05%s", g_bDoorsGlow ? "On" : "Off");
+
+	return Plugin_Handled;
+}
+
+Action CmdWindsGlow(int client, int args)
+{
+	if( !client )
+	{
+		ReplyToCommand(client, "[Barricades] Command can only be used %s", IsDedicatedServer() ? "in game on a dedicated server." : "in chat on a Listen server.");
+		return Plugin_Handled;
+	}
+
+	g_bWindsGlow = !g_bWindsGlow;
+
+	static char sModel[128];
+
+	int entity = -1;
+	while( (entity = FindEntityByClassname(entity, "prop_physics")) != INVALID_ENT_REFERENCE )
+	{
+		GetEntPropString(entity, Prop_Data, "m_ModelName", sModel, sizeof(sModel));
+
+		if(
+			strcmp(sModel, "models/props/cs_militia/militiawindow02_breakable.mdl", false) == 0 ||
+			strcmp(sModel, "models/props_windows/window_farmhouse_small.mdl", false) == 0 ||
+			strcmp(sModel, "models/props_windows/window_industrial.mdl", false) == 0 ||
+			strcmp(sModel, "models/props_windows/window_urban_apt.mdl", false) == 0 ||
+			strcmp(sModel, "models/props_windows/window_farmhouse_big.mdl", false) == 0
+		)
+		{
+			SetEntProp(entity, Prop_Send, "m_iGlowType", 3);
+			SetEntProp(entity, Prop_Send, "m_glowColorOverride", 255);
+			SetEntProp(entity, Prop_Send, "m_nGlowRange", 9999);
+			SetEntProp(entity, Prop_Send, "m_nGlowRangeMin", 20);
+			if( g_bWindsGlow )
+				AcceptEntityInput(entity, "StartGlowing");
+			else
+				AcceptEntityInput(entity, "StopGlowing");
+		}
+	}
+
+	PrintToChat(client, "\x04[Barricades] \x01Windows glow turned: \x05%s", g_bWindsGlow ? "On" : "Off");
+
+	return Plugin_Handled;
+}
+
+Action CmdWallsGlow(int client, int args)
+{
+	if( !client )
+	{
+		ReplyToCommand(client, "[Barricades] Command can only be used %s", IsDedicatedServer() ? "in game on a dedicated server." : "in chat on a Listen server.");
+		return Plugin_Handled;
+	}
+
+	g_bWallsGlow = !g_bWallsGlow;
+
+	int prop;
+	int entity = -1;
+	if( g_bWallsGlow )
+	{
+		while( (entity = FindEntityByClassname(entity, "func_breakable")) != INVALID_ENT_REFERENCE )
+		{
+			float vAng[3], vPos[3];
+			GetEntPropVector(entity, Prop_Data, "m_vecMins", vPos);
+			GetEntPropVector(entity, Prop_Data, "m_vecMaxs", vAng);
+			AddVectors(vPos, vAng, vAng);
+			GetVectorAngles(vAng, vAng);
+			vAng[0] = 0.0;
+			vAng[2] = 0.0;
+
+			GetEntPropVector(entity, Prop_Send, "m_vecOrigin", vPos);
+			vPos[2] -= 50.0;
+			MoveForward(vPos, vAng, vPos, 30.0);
+
+			prop = CreateEntityByName("prop_dynamic");
+			if( prop != -1 )
+			{
+				g_iWallGlow[prop] = EntIndexToEntRef(prop);
+				DispatchKeyValue(prop, "model", MODEL_DOOR);
+				TeleportEntity(prop, vPos, vAng, NULL_VECTOR);
+				DispatchSpawn(prop);
+
+				SetEntProp(prop, Prop_Send, "m_iGlowType", 3);
+				SetEntProp(prop, Prop_Send, "m_glowColorOverride", 255);
+				SetEntProp(prop, Prop_Send, "m_nGlowRange", 9999);
+				SetEntProp(prop, Prop_Send, "m_nGlowRangeMin", 20);
+				AcceptEntityInput(prop, "StartGlowing");
+			}
+		}
+	}
+	else
+	{
+		for( int i = 0; i < 2048; i++ )
+		{
+			entity = g_iWallGlow[i];
+			g_iWallGlow[i] = 0;
+
+			if( entity && EntRefToEntIndex(entity) != INVALID_ENT_REFERENCE )
+			{
+				RemoveEntity(entity);
+			}
+		}
+	}
+
+	PrintToChat(client, "\x04[Barricades] \x01Breakable walls glow turned: \x05%s", g_bWallsGlow ? "On" : "Off");
+
+	return Plugin_Handled;
+}
+
+
+
+// ====================================================================================================
+//					COMMANDS - ADD / DELETE
+// ====================================================================================================
+Action CmdAdd(int client, int args)
+{
+	if( !g_bCvarAllow )
+	{
+		ReplyToCommand(client, "[SM] Plugin turned off.");
+		return Plugin_Handled;
+	}
+
+	if( !client )
+	{
+		ReplyToCommand(client, "[Barricades] Command can only be used %s", IsDedicatedServer() ? "in game on a dedicated server." : "in chat on a Listen server.");
+		return Plugin_Handled;
+	}
+
+	if( args != 1 )
+	{
+		PrintToChat(client, "Usage: sm_barricade_add <plank type: -1=Small breakable (aim at wall). -2=Large breakable (aim at wall). 1=Small planks (back to wall), 2=Large planks (back to wall)>.");
+		return Plugin_Handled;
+	}
+
+	char sPath[PLATFORM_MAX_PATH];
+	BuildPath(Path_SM, sPath, sizeof(sPath), CONFIG_DATA);
+	if( !FileExists(sPath) )
+	{
+		File hCfg = OpenFile(sPath, "w");
+		hCfg.WriteLine("");
+		delete hCfg;
+	}
+
+	// Load config
+	KeyValues hFile = new KeyValues("barricades");
+	if( !hFile.ImportFromFile(sPath) )
+	{
+		PrintToChat(client, "\x04[Barricades] \x01Error: Cannot read the Barricades config, assuming empty file. (\x05%s\x01).", sPath);
+	}
+
+	// Check for current map in the config
+	char sMap[64];
+	GetCurrentMap(sMap, sizeof(sMap));
+	if( !hFile.JumpToKey(sMap, true) )
+	{
+		PrintToChat(client, "\x04[Barricades] \x01Error: Failed to add map to the Barricades data config.");
+		delete hFile;
+		return Plugin_Handled;
+	}
+
+	char sIndex[4];
+
+	int index = 1;
+	while( index )
+	{
+		IntToString(index, sIndex, sizeof(sIndex));
+
+		if( KvJumpToKey(hFile, sIndex) )
+		{
+			index++;
+			hFile.GoBack();
+		} else {
+			break;
+		}
+	}
+
+	// Type
+	int type;
+	GetCmdArg(1, sMap, sizeof(sMap));
+	type = StringToInt(sMap);
+
+	if( type > 0 )
+	{
+		index += 2048;
+		g_bCustomData = true;
+
+		// Create entry
+		KvJumpToKey(hFile, sIndex, true);
+
+		// Save data
+		float vPos[3];
+
+		// Pos
+		GetClientAbsOrigin(client, vPos);
+		vPos[2] += 40.0;
+		hFile.SetVector("pos", vPos);
+		g_vPos[index] = vPos;
+
+		// Ang
+		GetClientEyeAngles(client, vPos);
+		vPos[0] = 0.0;
+		vPos[1] -= 180.0;
+		vPos[2] = 0.0;
+		hFile.SetFloat("ang", vPos[1]);
+		g_vAng[index] = vPos;
+
+		if( type == 2 )
+		{
+			g_iTypeProp[index] = TYPE_DOORS;
+			g_iRelative[index] = index - 2048;
+		}
+
+		index -= 2048;
+	}
+	else
+	{
+		// Aim target
+		int aim = GetClientAimTarget(client, false);
+		if( aim > MaxClients )
+		{
+			// Verify class
+			char sClass[16];
+			GetEdictClassname(aim, sClass, sizeof(sClass));
+			if( strcmp(sClass, "func_breakable") == 0 || strcmp(sClass, "prop_physics") == 0 )
+			{
+				if( g_hBreakable == null ) g_hBreakable = new ArrayList(4);
+
+				int hammer = GetEntProp(aim, Prop_Data, "m_iHammerID");
+
+				// Create entry
+				KvJumpToKey(hFile, sIndex, true);
+
+				hFile.SetNum("hammer", hammer);
+
+				// Save entry
+				int entry = g_hBreakable.Push(hammer);
+				g_hBreakable.Set(entry, hammer, INDEX_HAMMER);
+				g_hBreakable.Set(entry, type, INDEX_TYPE);
+
+				// Get Angle
+				float vPos[3], vAng[3];
+				GetClientEyePosition(client, vPos);
+				GetClientEyeAngles(client, vAng);
+
+				Handle trace = TR_TraceRayFilterEx(vPos, vAng, MASK_SHOT, RayType_Infinite, TraceFilter);
+
+				if( TR_DidHit(trace) )
+				{
+					float vNorm[3];
+					TR_GetPlaneNormal(trace, vNorm);
+					GetVectorAngles(vNorm, vAng);
+ 
+					vAng[0] = 0.0;
+					vAng[2] = 0.0;
+					vAng[1] -= 90.0;
+
+					hFile.SetNum("angle", RoundFloat(vAng[1]));
+					g_hBreakable.Set(entry, RoundFloat(vAng[1]), INDEX_ANGLE);
+				}
+
+				delete trace;
+
+				// Setup for usage
+				SpawnPostWalls(aim);
+			} else {
+				PrintToChat(client, "\x04[Barricades] \x01Not aiming at a \x05func_breakable\x01 or \x05prop_physics\x01 wall.");
+				delete hFile;
+				return Plugin_Handled;
+			}
+		} else {
+			PrintToChat(client, "\x04[Barricades] \x01Not aiming at a \x05func_breakable\x01 or \x05prop_physics\x01 wall.");
+			delete hFile;
+			return Plugin_Handled;
+		}
+	}
+
+	hFile.SetNum("type", type);
+
+	// Save cfg
+	hFile.Rewind();
+	hFile.ExportToFile(sPath);
+	delete hFile;
+
+	PrintToChat(client, "\x04[Barricades] \x01Saved new index \x05%d\x01.", index);
+
+	return Plugin_Handled;
+}
+
+bool TraceFilter(int entity, int contentsMask)
+{
+	return entity > MaxClients || !entity;
+}
+
+Action CmdDel(int client, int args)
+{
+	if( !g_bCvarAllow )
+	{
+		ReplyToCommand(client, "[SM] Plugin turned off.");
+		return Plugin_Handled;
+	}
+
+	if( !client )
+	{
+		ReplyToCommand(client, "[Barricades] Command can only be used %s", IsDedicatedServer() ? "in game on a dedicated server." : "in chat on a Listen server.");
+		return Plugin_Handled;
+	}
+
+	int index;
+
+	float vPos[3];
+	GetClientAbsOrigin(client, vPos);
+
+
+	// Loop props
+	for( int i = MaxClients + 1; i < 4096; i++ )
+	{
+		// Prop pos
+		if( g_vPos[i][0] && g_vPos[i][1] && g_vPos[i][2] )
+		{
+			if( GetVectorDistance(vPos, g_vPos[i]) <= 100.0 )
+			{
+				index = i;
+				break;
+			}
+		}
+	}
+
+	if( index == 0 )
+	{
+		PrintToChat(client, "\x04[Barricades] \x01Cannot find a nearby Barricade index. Move closer to the frame or try the other side.", index);
+		return Plugin_Handled;
+	}
+
+	// Load config
+	char sPath[PLATFORM_MAX_PATH];
+	BuildPath(Path_SM, sPath, sizeof(sPath), CONFIG_DATA);
+	if( !FileExists(sPath) )
+	{
+		PrintToChat(client, "\x04[Barricades] Warning: Cannot find the data config (\x05%s\x01).", CONFIG_DATA);
+		return Plugin_Handled;
+	}
+
+	KeyValues hFile = new KeyValues("barricades");
+	if( !hFile.ImportFromFile(sPath) )
+	{
+		PrintToChat(client, "\x04[Barricades] Warning: Cannot load the data config (\x05%s\x01).", sPath);
+		delete hFile;
+		return Plugin_Handled;
+	}
+
+	// Check for current map in the config
+	char sMap[64];
+	GetCurrentMap(sMap, sizeof(sMap));
+
+	if( !hFile.JumpToKey(sMap) )
+	{
+		PrintToChat(client, "\x04[Barricades] Warning: Current map not in the data config.");
+		delete hFile;
+		return Plugin_Handled;
+	}
+
+	bool bMove;
+	char sTemp[4];
+	int hammer, i;
+
+	// Manual position
+	if( index > 2048 )
+	{
+		i = index - 2048;
+	}
+	// Breakable entity
+	else
+	{
+		hammer = GetEntProp(index, Prop_Data, "m_iHammerID");
+		i = 1;
+	}
+
+	// Move the other entries down
+	while( index )
+	{
+		IntToString(i, sTemp, sizeof(sTemp));
+
+		if( hFile.JumpToKey(sTemp) )
+		{
+			if( !bMove )
+			{
+				// Breakable entity matched by hammerID
+				if( index < 2048 )
+				{
+					if( hFile.GetNum("hammer") == hammer )
+					{
+						bMove = true;
+
+						g_vPos[index] = view_as<float>({ 0.0, 0.0, 0.0 });
+						g_vAng[index] = view_as<float>({ 0.0, 0.0, 0.0 });
+						g_iTypeProp[index] = 0;
+						g_iRelative[index] = 0;
+
+						index = i;
+
+						int entry = g_hBreakable.FindValue(hammer, INDEX_HAMMER);
+						if( entry != -1 )
+						{
+							g_hBreakable.Erase(entry);
+						}
+					}
+				}
+				else
+				{
+					// Jumped straight to the index
+					bMove = true;
+				}
+
+				// Delete entry
+				if( bMove )
+				{
+					hFile.DeleteThis();
+
+					// Delete barricades
+					int entity;
+
+					for( int x = 0; x < 4; x++ )
+					{
+						entity = g_iBarricade[index][x];
+						if( entity && EntRefToEntIndex(entity) != INVALID_ENT_REFERENCE )
+						{
+							RemoveEntity(entity);
+						}
+					}
+				}
+			}
+			else
+			{
+				// Move entry indexes to replace the deleted one
+				IntToString(i - 1, sTemp, sizeof(sTemp));
+				hFile.SetSectionName(sTemp);
+				hFile.GoBack();
+			}
+
+			i++;
+			hFile.Rewind();
+			hFile.JumpToKey(sMap);
+		}
+		else
+		{
+			break;
+		}
+
+		// Move data array from deleted indexes
+		for( int x = 0; x < 4; x++ )
+		{
+			g_iBarricade[2048 + i - 1][x] = g_iBarricade[2048 + i][x];
+		}
+
+		g_vPos[2048 + i - 1] = g_vPos[2048 + i];
+		g_vAng[2048 + i - 1] = g_vAng[2048 + i];
+		g_iTypeProp[2048 + i - 1] = g_iTypeProp[2048 + i];
+		g_iRelative[2048 + i - 1] = g_iRelative[2048 + i];
+
+		g_vPos[2048 + i] = view_as<float>({ 0.0, 0.0, 0.0 });
+		g_vAng[2048 + i] = view_as<float>({ 0.0, 0.0, 0.0 });
+		g_iTypeProp[2048 + i] = 0;
+		g_iRelative[2048 + i] = 0;
+	}
+
+	if( bMove )
+	{
+		// Save to file
+		hFile.Rewind();
+		hFile.ExportToFile(sPath);
+
+		PrintToChat(client, "\x01\x04[Barricades] \x01Deleted index \x05%d \x01from the data config.", index < 2048 ? index : index - 2048);
+	}
+	else
+	{
+		PrintToChat(client, "\x01\x04[Barricades] \x01Failed to delete index \x05%d \x01from the data config.", index < 2048 ? index : index - 2048);
+	}
+
+	return Plugin_Handled;
+}
+
+Action CmdRel(int client, int args)
+{
+	if( g_bCvarAllow )
+	{
+		ResetPlugin();
+		LoadConfig();
+		LateLoad();
+
+		ReplyToCommand(client, "[Barricades] Plugin reset and data config reloaded.");
+	}
+
+	return Plugin_Handled;
+}
+
+
+
+// ====================================================================================================
 //					EVENTS
 // ====================================================================================================
 public void OnClientPutInServer(int client)
@@ -909,6 +1238,7 @@ void Event_RoundEnd(Event event, const char[] name, bool dontBroadcast)
 {
 	g_bDoorsGlow = false;
 	g_bWindsGlow = false;
+	g_bWallsGlow = false;
 	ResetPlugin();
 }
 
@@ -918,7 +1248,7 @@ void Event_RoundEnd(Event event, const char[] name, bool dontBroadcast)
 // ====================================================================================================
 public void OnEntityCreated(int entity, const char[] classname)
 {
-	if( g_bCvarAllow )
+	if( g_bCvarAllow && g_bMapStarted )
 	{
 		if( g_iCvarType & TYPE_DOORS && strcmp(classname, "prop_door_rotating") == 0 )
 		{
@@ -927,6 +1257,10 @@ public void OnEntityCreated(int entity, const char[] classname)
 		else if( g_iCvarType & TYPE_WINDS && strcmp(classname, "prop_physics") == 0 )
 		{
 			SDKHook(entity, SDKHook_SpawnPost, SpawnPostWinds);
+		}
+		else if( g_hBreakable && g_iCvarType & TYPE_WALLS && (strcmp(classname, "func_breakable") == 0 || strcmp(classname, "prop_physics") == 0) )
+		{
+			SDKHook(entity, SDKHook_SpawnPost, SpawnPostWalls);
 		}
 	}
 }
@@ -938,6 +1272,9 @@ public void OnEntityCreated(int entity, const char[] classname)
 // ====================================================================================================
 void SpawnPostDoors(int entity)
 {
+	int hammer = GetEntProp(entity, Prop_Data, "m_iHammerID");
+	if( hammer == 314 ) return; // Ignore these, they are planks
+
 	// Ignore outhouse doors and gun cabinet doors
 	static char sModel[64];
 	GetEntPropString(entity, Prop_Data, "m_ModelName", sModel, sizeof(sModel));
@@ -965,17 +1302,12 @@ void SpawnPostDoors(int entity)
 
 	if( g_bDoubleDoorFix )
 	{
-		int hammer = GetEntProp(entity, Prop_Data, "m_iHammerID");
-
 		switch( hammer )
 		{
 			case 705345, 492367:	DispatchKeyValue(entity, "targetname", "silver_barricade_fix_1");
 			case 494086, 494081:	DispatchKeyValue(entity, "targetname", "silver_barricade_fix_2");
 		}
 	}
-
-	// Store ref
-	g_iEnties[entity] = EntIndexToEntRef(entity);
 
 	// Save positions
 	float vAng[3], vPos[3];
@@ -991,6 +1323,9 @@ void SpawnPostDoors(int entity)
 		vPos[2] += 42.0;
 	}
 
+
+	// Store data
+	g_iEnties[entity] = EntIndexToEntRef(entity);
 	g_vPos[entity] = vPos;
 	g_vAng[entity] = vAng;
 	g_iTypeProp[entity] = TYPE_DOORS;
@@ -1011,7 +1346,7 @@ void MatchRelatives(int entity)
 	{
 		while( (target = FindEntityByClassname(target, "prop_door_rotating")) != INVALID_ENT_REFERENCE )
 		{
-			if( target != entity )
+			if( target != entity && GetEntProp(entity, Prop_Data, "m_iHammerID") != 314 )
 			{
 				GetEntPropString(target, Prop_Data, "m_iName", sTarget, sizeof(sTarget));
 				if( strcmp(sTemp, sTarget) == 0 )
@@ -1035,7 +1370,7 @@ void MatchRelatives(int entity)
 
 		while( (target = FindEntityByClassname(target, "prop_door_rotating")) != INVALID_ENT_REFERENCE )
 		{
-			if( target != entity )
+			if( target != entity && GetEntProp(entity, Prop_Data, "m_iHammerID") != 314  )
 			{
 				GetEntPropString(target, Prop_Data, "m_iName", sTarget, sizeof(sTarget));
 				if( strcmp(sTemp, sTarget) == 0 )
@@ -1092,6 +1427,49 @@ void SpawnPostWinds(int entity)
 		g_vPos[entity] = vPos;
 		g_vAng[entity] = vAng;
 		g_iTypeProp[entity] = type == 3 ? TYPE_WINDS_BIG : TYPE_WINDS;
+	}
+}
+
+
+
+// ====================================================================================================
+//					WALLS SPAWN
+// ====================================================================================================
+void SpawnPostWalls(int entity)
+{
+	int hammer = GetEntProp(entity, Prop_Data, "m_iHammerID");
+	int index = g_hBreakable.FindValue(hammer, INDEX_HAMMER);
+
+	if( index != -1 )
+	{
+		// Since "func_breakable" angles are always 0,0,0, let's calculate them by using the vMins and vMaxs of the object
+		float vAng[3], vPos[3], vMin[3], vMax[3];
+		GetEntPropVector(entity, Prop_Data, "m_vecMins", vMin);
+		GetEntPropVector(entity, Prop_Data, "m_vecMaxs", vMax);
+		GetEntPropVector(entity, Prop_Send, "m_vecOrigin", vPos);
+
+		// Sometimes the min is near 0,0,0 and max is off to the side, this seems to fix that
+		vMax[0] /= 2.0;
+		vMax[1] /= 2.0;
+		vMax[2] /= 2.0;
+		vMin[0] /= 2.0;
+		vMin[1] /= 2.0;
+		vMin[2] /= 2.0;
+
+		AddVectors(vPos, vMax, vPos);
+		AddVectors(vPos, vMin, vPos);
+
+		vPos[2] -= 10.0;
+		vAng[1] = float(g_hBreakable.Get(index, INDEX_ANGLE));
+
+		g_iEnties[entity] = EntIndexToEntRef(entity);
+		g_vPos[entity] = vPos;
+		g_vAng[entity] = vAng;
+
+		if( g_hBreakable.Get(index, INDEX_TYPE) == -1 )
+			g_iTypeProp[entity] = TYPE_WINDS;
+		else
+			g_iTypeProp[entity] = TYPE_WINDS_BIG;
 	}
 }
 
@@ -1373,7 +1751,7 @@ void BuildBarricade(int index)
 			DispatchSpawn(entity);
 
 			DispatchKeyValue(entity, "classname", "prop_door_rotating"); // SI Attacks
-			SetEntityMoveType(entity, MOVETYPE_VPHYSICS); // Tank attacks
+			DispatchKeyValue(entity, "hammerid", "314"); // Prevent glow on these
 
 			// Health
 			SetEntProp(entity, Prop_Data, "m_iHealth", g_iCvarHealth);
@@ -1456,6 +1834,15 @@ void MoveSideway(const float vPos[3], const float vAng[3], float vReturn[3], flo
 {
 	float vDir[3];
 	GetAngleVectors(vAng, vDir, NULL_VECTOR, NULL_VECTOR);
+	vReturn = vPos;
+	vReturn[0] += vDir[0] * fDistance;
+	vReturn[1] += vDir[1] * fDistance;
+}
+
+void MoveForward(const float vPos[3], const float vAng[3], float vReturn[3], float fDistance)
+{
+	float vDir[3];
+	GetAngleVectors(vAng, NULL_VECTOR, vDir, NULL_VECTOR);
 	vReturn = vPos;
 	vReturn[0] += vDir[0] * fDistance;
 	vReturn[1] += vDir[1] * fDistance;
