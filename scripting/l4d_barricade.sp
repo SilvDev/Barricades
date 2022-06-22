@@ -18,7 +18,7 @@
 
 
 
-#define PLUGIN_VERSION 		"1.16"
+#define PLUGIN_VERSION 		"1.17"
 
 /*=======================================================================================
 	Plugin Info:
@@ -31,6 +31,9 @@
 
 ========================================================================================
 	Change Log:
+
+1.17 (22-June-2022)
+	- Fixed the saferoom doors not building barricades.
 
 1.16 (21-June-2022)
 	- Changed cvar "l4d_barricade_types" to allow building barricades where Saferoom Doors fall. Requires plugin the "Saferoom Door Spam Protection" with auto fall enabled.
@@ -1522,7 +1525,6 @@ void SpawnPostSafes(int entity)
 	GetEntPropVector(entity, Prop_Data, "m_angRotation", vAng);
 	vAng[1] -= 90.0;
 	vPos[2] -= 15.0;
-	vPos[2] -= 10000.0; // "Saferoom Door Spam Protection" plguin teleports the door up 10k, so account for this
 
 	g_vPos[entity] = vPos;
 	g_vAng[entity] = vAng;
@@ -1577,7 +1579,7 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 								i >= 2048 ||
 
 								// Saferoom door
-								(g_iTypeProp[i] == TYPE_SAFES && GetEntProp(i, Prop_Send, "m_eDoorState") == DOOR_STATE_CLOSING_IN_PROGRESS && GetEntProp(i, Prop_Send, "m_spawnflags") == DOOR_FLAG_SILENT|DOOR_FLAG_IGNORE_USE) ||
+								(g_iTypeProp[i] == TYPE_SAFES && GetEntProp(i, Prop_Send, "m_spawnflags") == DOOR_FLAG_SILENT|DOOR_FLAG_IGNORE_USE) ||
 
 								// Dead prop
 								(g_iEnties[i] && EntRefToEntIndex(g_iEnties[i]) == INVALID_ENT_REFERENCE && !IsValidEntRef(g_iRelative[i]))
