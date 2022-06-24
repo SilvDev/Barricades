@@ -18,7 +18,7 @@
 
 
 
-#define PLUGIN_VERSION 		"1.17"
+#define PLUGIN_VERSION 		"1.18"
 
 /*=======================================================================================
 	Plugin Info:
@@ -32,15 +32,20 @@
 ========================================================================================
 	Change Log:
 
-1.17 (22-June-2022)
+1.18 (24-Jun-2022)
+	- Added cvar "l4d_barricade_vocalize" to vocalize when building. Thanks to "gongo" for the suggestion.
+	- Fixed building barricades on the last saferoom door. Thanks to "gongo" for reporting.
+	- Fixed cvar "l4d_barricade_types" not working correctly. Thanks to "gongo" for reporting.
+
+1.17 (22-Jun-2022)
 	- Fixed the saferoom doors not building barricades.
 
-1.16 (21-June-2022)
-	- Changed cvar "l4d_barricade_types" to allow building barricades where Saferoom Doors fall. Requires plugin the "Saferoom Door Spam Protection" with auto fall enabled.
+1.16 (21-Jun-2022)
+	- Changed cvar "l4d_barricade_types" to allow building barricades where Saferoom Doors fall. Requires plugin the "Saferoom Door Spam Protection" with falling door enabled.
 	- L4D1: Fixed the progress bar not displaying.
 	- L4D1: Fixed the barricades falling. Thanks to "CrazMan" for reporting.
 
-1.15 (21-June-2022)
+1.15 (21-Jun-2022)
 	- New feature: Building barricades on breakable walls!
 	- Data config updated adding barricades to many open doorways and breakable walls on all L4D2 official Valve maps.
 
@@ -48,53 +53,53 @@
 	- L4D2: Added command "sm_walls_glow" to show where breakable walls are. Note: this creates many "prop_physics" with door models for the glow.
 	- L4D1: Fixed the barricades falling to the ground. Thanks to "CrazMan" for reporting.
 
-1.14 (20-June-2022)
+1.14 (20-Jun-2022)
 	- Added a data config to specify positions where there are no doors to allow building barricades in that spot.
 	- Added commands "sm_barricade_add" and "sm_barricade_del" to save and delete entries from the data config.
 	- L4D2: Plugin now hides the weapon world model when building a barricade.
 	- L4D2: Tanks now attack the planks. Thanks to "Lux" for finding the solution.
 	- L4D2: Special Infected now attack the planks.
 
-1.13 (16-June-2022)
+1.13 (16-Jun-2022)
 	- Changed cvar "l4d_barricade_keys" to set accept SHIFT + USE.
 
-1.12 (09-June-2022)
+1.12 (09-Jun-2022)
 	- Added some door models to prevent building barricades on them.
 
-1.11 (08-June-2022)
+1.11 (08-Jun-2022)
 	- L4D2: Fixed the building animation not ending when releasing the USE button or after progress bar has finished.
 
-1.10 (07-June-2022)
+1.10 (07-Jun-2022)
 	- L4D2: Fixed the progress bar not ending correctly.
 	- L4D2: Fixed another possible bug of players getting stuck.
 
-1.9 (07-June-2022)
+1.9 (07-Jun-2022)
 	- L4D2: Fixed the new progress bar creating a solid random model. Thanks to "gongo" for reporting.
 	- L4D2: Potentially fixed players getting stuck when the progress bar is destroyed.
 	- Changed some cvars to have a minimum value of 0.1, to prevent potential issues with spamming USE.
 
-1.8 (07-June-2022)
+1.8 (07-Jun-2022)
 	- L4D2: Fixed the double door fix not working from map start.
 
-1.7 (07-June-2022)
+1.7 (07-Jun-2022)
 	- Added cvar "l4d_barricade_keys" to set the key combination. Requested by "xZk".
 	- Fixed building a barricade when reviving someone. Thanks to "gongo" for reporting.
 	- L4D2: Progress bar changed to timed button with custom text. Thanks to "xZk" for the method.
 
-1.6 (05-June-2022)
+1.6 (05-Jun-2022)
 	- Optimized cvar "l4d_barricade_flags" flag checking.
 
-1.5 (04-June-2022)
+1.5 (04-Jun-2022)
 	- Added cvar "l4d_barricade_flags" to only allow users with specific flags to build barricades. Requested by "Maur0".
 	- Added more windows that can be barricaded. Thanks to "Maur0" for reporting.
 
-1.4 (03-June-2022)
+1.4 (03-Jun-2022)
 	- L4D1: Fixed the planks not showing, however Infected do not attack the barrier. Thanks to "finishlast" for reporting.
 
-1.3 (03-June-2022)
+1.3 (03-Jun-2022)
 	- Fixed some issues regarding plank health.
 
-1.2 (03-June-2022)
+1.2 (03-Jun-2022)
 	- Fixed some plank placements being wrong with certain doors and windows.
 
 	- Plugin will now auto link some known individual double doors (currently only L4D2: "c1m1_hotel").
@@ -102,13 +107,13 @@
 	- If double doors open individually (which then creates small plank barricades), please report to me the map and location to fix.
 	- If admins don't want the doors linked, please request a cvar to block those known doors from being used for barricades.
 
-1.1 (03-June-2022)
+1.1 (03-Jun-2022)
 	- Common infected now attack the planks!
 	- Plugin now supports building barricades in broken Window frames.
 	- Plugin renamed to "Barricades - Doors and Windows".
 	- All cvars renamed.
 
-1.0 (01-June-2022)
+1.0 (01-Jun-2022)
 	- Initial release.
 
 ======================================================================================*/
@@ -163,11 +168,11 @@ enum
 
 enum
 {
-	TYPE_DOORS = 1,
-	TYPE_WINDS,
-	TYPE_WALLS,
-	TYPE_SAFES,
-	TYPE_WINDS_BIG
+	TYPE_DOORS		= (1<<0),
+	TYPE_WINDS		= (1<<1),
+	TYPE_WALLS		= (1<<2),
+	TYPE_SAFES		= (1<<3),
+	TYPE_WINDS_BIG	= (1<<4),
 }
 
 enum
@@ -177,8 +182,8 @@ enum
 	INDEX_ANGLE,
 }
 
-ConVar g_hCvarAllow, g_hCvarMPGameMode, g_hCvarModes, g_hCvarModesOff, g_hCvarModesTog, g_hCvarDamageC, g_hCvarDamageI, g_hCvarDamageS, g_hCvarDamageT, g_hCvarFlags, g_hCvarHealth, g_hCvarKeys, g_hCvarRange, g_hCvarTime, g_hCvarTimePress, g_hCvarTimeWait, g_hCvarType;
-int g_iCvarDamageC, g_iCvarDamageI, g_iCvarDamageS, g_iCvarDamageT, g_iCvarFlags, g_iCvarHealth, g_iCvarKeys, g_iCvarTime, g_iCvarType;
+ConVar g_hCvarAllow, g_hCvarMPGameMode, g_hCvarModes, g_hCvarModesOff, g_hCvarModesTog, g_hCvarDamageC, g_hCvarDamageI, g_hCvarDamageS, g_hCvarDamageT, g_hCvarFlags, g_hCvarHealth, g_hCvarKeys, g_hCvarRange, g_hCvarTime, g_hCvarTimePress, g_hCvarTimeWait, g_hCvarType, g_hCvarVoca;
+int g_iCvarDamageC, g_iCvarDamageI, g_iCvarDamageS, g_iCvarDamageT, g_iCvarFlags, g_iCvarHealth, g_iCvarKeys, g_iCvarTime, g_iCvarType, g_iCvarVoca;
 float g_fCvarRange, g_fCvarTimeWait, g_fCvarTimePress;
 bool g_bCvarAllow, g_bMapStarted, g_bLeft4Dead2, g_bDoubleDoorFix, g_bDoubleDoorMap, g_bCustomData, g_bDoorsGlow, g_bWallsGlow, g_bWindsGlow;
 char g_sMod[4];
@@ -210,6 +215,42 @@ char g_sBlockedModels[5][] =
 	"models/props_unique/guncabinet01_rdoor.mdl",
 	"models/props_waterfront/footlocker01.mdl",
 	"models/props_windows/window_urban_sash_32_72_full_gib08.mdl"
+};
+
+// Vocalize for Left 4 Dead 2
+static const char g_sCoach[][] =
+{
+	"CoverMeC102", "CoverMeC103", "WaitHere01", "WaitHere02", "WaitHere03", "WaitHere04", "WaitHere05", "WaitHere06"
+};
+static const char g_sEllis[][] =
+{
+	"CoverMeC103", "WaitHere01", "WaitHere02", "WaitHere03", "WaitHere04"
+};
+static const char g_sNick[][] =
+{
+	"HealOtherCombat01", "HealOtherCombat02", "WaitHere01", "WaitHere02", "WaitHere03", "WaitHere04", "WaitHere05"
+};
+static const char g_sRochelle[][] =
+{
+	"CoverMe04", "WaitHere01", "WaitHere02", "WaitHere03", "WaitHere04"
+};
+
+// Vocalize for Left 4 Dead 1
+static const char g_sBill[][] =
+{
+	"overme01", "overme02", "overme03", "overme04", "overme05"
+};
+static const char g_sFrancis[][] =
+{
+	"coverme01", "coverme02", "coverme03", "coverme04", "coverme05", "coverme06", "coverme08", "coverme09", "coverme10"
+};
+static const char g_sLouis[][] =
+{
+	"coverme01", "coverme02", "coverme03", "coverme04", "coverme05"
+};
+static const char g_sZoey[][] =
+{
+	"coverme05", "coverme06", "coverme10", "coverme18", "coverme19", "coverme20", "coverme25", "coverme27"
 };
 
 
@@ -268,7 +309,8 @@ public void OnPluginStart()
 	g_hCvarTime =		CreateConVar(	"l4d_barricade_time",				"5",				"How long does it take to build 1 plank. Use whole numbers only, must be 1 or greater.", CVAR_FLAGS, true, 1.0 );
 	g_hCvarTimePress =	CreateConVar(	"l4d_barricade_time_press",			"0.3",				"How long must someone be holding +USE before building starts.", CVAR_FLAGS, true, 0.1 );
 	g_hCvarTimeWait =	CreateConVar(	"l4d_barricade_time_wait",			"0.5",				"How long after building a plank to make the player wait until they can build again.", CVAR_FLAGS, true, 0.1 );
-	g_hCvarType =		CreateConVar(	"l4d_barricade_types",				"7",				"1=Doors. 2=Windows. 4=Breakable Walls. 8=Saferoom Doors (requires \"Saferoom Door Spam Protection\" plugin with auto fall enabled). 15=All. Where can barricades be built. Add numbers together.", CVAR_FLAGS );
+	g_hCvarType =		CreateConVar(	"l4d_barricade_types",				"7",				"1=Doors. 2=Windows. 4=Breakable Walls. 8=Saferoom Doors (requires \"Saferoom Door Spam Protection\" plugin with falling door enabled). 15=All. Where can barricades be built. Add numbers together.", CVAR_FLAGS );
+	g_hCvarVoca =		CreateConVar(	"l4d_barricade_vocalize",			"30",				"0=Off. The chance out of 100 for the Survivor to vocalize when building a plank.", CVAR_FLAGS );
 	CreateConVar(						"l4d_barricade_version",			PLUGIN_VERSION,		"Barricades - Doors and Windows plugin version.", FCVAR_NOTIFY|FCVAR_DONTRECORD);
 	AutoExecConfig(true,				"l4d_barricade");
 
@@ -290,6 +332,7 @@ public void OnPluginStart()
 	g_hCvarTimePress.AddChangeHook(ConVarChanged_Cvars);
 	g_hCvarTimeWait.AddChangeHook(ConVarChanged_Cvars);
 	g_hCvarType.AddChangeHook(ConVarChanged_Cvars);
+	g_hCvarVoca.AddChangeHook(ConVarChanged_Cvars);
 
 	// Commands
 	if( g_bLeft4Dead2 && CommandExists("sm_doors_glow") == false ) // Shared with "Lock Doors" plugin
@@ -380,6 +423,8 @@ void ConVarChanged_Cvars(Handle convar, const char[] oldValue, const char[] newV
 
 void GetCvars()
 {
+	int type = g_iCvarType;
+
 	char sTemp[32];
 	g_hCvarFlags.GetString(sTemp, sizeof(sTemp));
 	g_iCvarFlags = ReadFlagString(sTemp);
@@ -394,6 +439,13 @@ void GetCvars()
 	g_fCvarTimePress = g_hCvarTimePress.FloatValue;
 	g_fCvarTimeWait = g_hCvarTimeWait.FloatValue;
 	g_iCvarType = g_hCvarType.IntValue;
+	g_iCvarVoca = g_hCvarVoca.IntValue;
+
+	if( type != g_iCvarType )
+	{
+		ResetPlugin();
+		LateLoad();
+	}
 }
 
 void IsAllowed()
@@ -744,10 +796,12 @@ Action CmdDoorsGlow(int client, int args)
 				AcceptEntityInput(entity, "StartGlowing");
 			else
 				AcceptEntityInput(entity, "StopGlowing");
+
+			ChangeEdictState(entity, 0);
 		}
 	}
 
-	PrintToChat(client, "\x04[Barricades] \x01Doors glow turned: \x05%s", g_bDoorsGlow ? "On" : "Off");
+	PrintToChat(client, "\x04[Doors] \x01Doors glow turned: \x05%s", g_bDoorsGlow ? "On" : "Off");
 
 	return Plugin_Handled;
 }
@@ -1359,7 +1413,6 @@ void SpawnPostDoors(int entity)
 		vPos[2] += 42.0;
 	}
 
-
 	// Store data
 	g_iEnties[entity] = EntIndexToEntRef(entity);
 	g_vPos[entity] = vPos;
@@ -1586,9 +1639,16 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 							)
 							{
 								dist = GetVectorDistance(vPos, g_vPos[i]);
-
 								if( dist < range )
 								{
+									// Validate saferoom has "fallen" - The "Saferoom Spam Protection" plugin teleports the door up 10k
+									if( g_iTypeProp[i] == TYPE_SAFES )
+									{
+										float vLoc[3];
+										GetEntPropVector(i, Prop_Send, "m_vecOrigin", vLoc);
+										if( vLoc[2] < g_vPos[i][2] + 1000.0 ) continue;
+									}
+
 									range = dist;
 									index = i;
 								}
@@ -1651,6 +1711,12 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 						// Stop player moving
 						SetEntityMoveType(client, MOVETYPE_NONE);
 						TeleportEntity(client, NULL_VECTOR, NULL_VECTOR, view_as<float>({ 0.0, 0.0, 0.0 }));
+
+						// Vocalize
+						if( g_iCvarVoca && GetRandomInt(1, 100) <= g_iCvarVoca )
+						{
+							PlayVocalize(client);
+						}
 					} else {
 						PlaySound(client);
 
@@ -2041,4 +2107,109 @@ bool IsClientPinned(int client)
 	)) return true;
 
 	return false;
+}
+
+
+
+// ====================================================================================================
+//					VOCALIZE SCENE
+// ====================================================================================================
+void PlayVocalize(int client)
+{
+	// Declare variables
+	int surv, max;
+	static char model[40];
+
+	// Get survivor model
+	GetEntPropString(client, Prop_Data, "m_ModelName", model, sizeof(model));
+	switch( model[29] )
+	{
+		case 'c': { Format(model, sizeof(model), "coach");		surv = 1; }
+		case 'b': { Format(model, sizeof(model), "gambler");	surv = 2; }
+		case 'h': { Format(model, sizeof(model), "mechanic");	surv = 3; }
+		case 'd': { Format(model, sizeof(model), "producer");	surv = 4; }
+		case 'v': { Format(model, sizeof(model), "NamVet");		surv = 5; }
+		case 'e': { Format(model, sizeof(model), "Biker");		surv = 6; }
+		case 'a': { Format(model, sizeof(model), "Manager");	surv = 7; }
+		case 'n': { Format(model, sizeof(model), "TeenGirl");	surv = 8; }
+		default:
+		{
+			int character = GetEntProp(client, Prop_Send, "m_survivorCharacter");
+
+			if( g_bLeft4Dead2 )
+			{
+				switch( character )
+				{
+					case 0:	{ Format(model, sizeof(model), "gambler");		surv = 2; } // Nick
+					case 1:	{ Format(model, sizeof(model), "producer");		surv = 4; } // Rochelle
+					case 2:	{ Format(model, sizeof(model), "coach");		surv = 1; } // Coach
+					case 3:	{ Format(model, sizeof(model), "mechanic");		surv = 3; } // Ellis
+					case 4:	{ Format(model, sizeof(model), "NamVet");		surv = 5; } // Bill
+					case 5:	{ Format(model, sizeof(model), "TeenGirl");		surv = 8; } // Zoey
+					case 6:	{ Format(model, sizeof(model), "Biker");		surv = 6; } // Francis
+					case 7:	{ Format(model, sizeof(model), "Manager");		surv = 7; } // Louis
+				}
+			} else {
+				switch( character )
+				{
+					case 0:	 { Format(model, sizeof(model) ,"TeenGirl");	surv = 8; } // Zoey
+					case 1:	 { Format(model, sizeof(model) ,"NamVet");		surv = 5; } // Bill
+					case 2:	 { Format(model, sizeof(model) ,"Biker");		surv = 6; } // Francis
+					case 3:	 { Format(model, sizeof(model) ,"Manager");		surv = 7; } // Louis
+				}
+			}
+		}
+	}
+
+	// Failed for some reason? Should never happen.
+	if( surv == 0 )
+		return;
+
+	// Lock
+	switch( surv )
+	{
+		case 1: max = sizeof(g_sCoach);		// Coach
+		case 2: max = sizeof(g_sNick);		// Nick
+		case 3: max = sizeof(g_sEllis);		// Ellis
+		case 4: max = sizeof(g_sRochelle);	// Rochelle
+		case 5: max = sizeof(g_sBill);		// Bill
+		case 6: max = sizeof(g_sFrancis);	// Francis
+		case 7: max = sizeof(g_sLouis);		// Louis
+		case 8: max = sizeof(g_sZoey);		// Zoey
+	}
+
+	// Random number
+	int random = GetRandomInt(0, max - 1);
+
+	// Select random vocalize
+	static char sTemp[40];
+	switch( surv )
+	{
+		case 1: Format(sTemp, sizeof(sTemp), g_sCoach[random]);
+		case 2: Format(sTemp, sizeof(sTemp), g_sNick[random]);
+		case 3: Format(sTemp, sizeof(sTemp), g_sEllis[random]);
+		case 4: Format(sTemp, sizeof(sTemp), g_sRochelle[random]);
+		case 5: Format(sTemp, sizeof(sTemp), g_sBill[random]);
+		case 6: Format(sTemp, sizeof(sTemp), g_sFrancis[random]);
+		case 7: Format(sTemp, sizeof(sTemp), g_sLouis[random]);
+		case 8: Format(sTemp, sizeof(sTemp), g_sZoey[random]);
+	}
+
+	// Create scene location and call
+	Format(sTemp, sizeof(sTemp), "scenes/%s/%s.vcd", model, sTemp);
+	VocalizeScene(client, sTemp);
+}
+
+// Taken from:
+// [Tech Demo] L4D2 Vocalize ANYTHING
+// https://forums.alliedmods.net/showthread.php?t=122270
+// author = "AtomicStryker"
+void VocalizeScene(int client, const char[] scenefile)
+{
+	int entity = CreateEntityByName("instanced_scripted_scene");
+	DispatchKeyValue(entity, "SceneFile", scenefile);
+	DispatchSpawn(entity);
+	SetEntPropEnt(entity, Prop_Data, "m_hOwner", client);
+	ActivateEntity(entity);
+	AcceptEntityInput(entity, "Start", client, client);
 }
