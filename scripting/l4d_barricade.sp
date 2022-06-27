@@ -18,7 +18,7 @@
 
 
 
-#define PLUGIN_VERSION 		"1.18"
+#define PLUGIN_VERSION 		"1.19"
 
 /*=======================================================================================
 	Plugin Info:
@@ -31,6 +31,9 @@
 
 ========================================================================================
 	Change Log:
+
+1.19 (27-Jun-2022)
+	- Fixed custom spawn locations not loading on round restarts. Thanks to "gongo" for reporting.
 
 1.18 (24-Jun-2022)
 	- Added cvar "l4d_barricade_vocalize" to vocalize when building. Thanks to "gongo" for the suggestion.
@@ -459,6 +462,7 @@ void IsAllowed()
 		g_bCvarAllow = true;
 
 		HookEvent("round_end",			Event_RoundEnd,		EventHookMode_PostNoCopy);
+		HookEvent("round_start",		Event_RoundStart,	EventHookMode_PostNoCopy);
 
 		LateLoad();
 	}
@@ -467,6 +471,7 @@ void IsAllowed()
 		g_bCvarAllow = false;
 
 		UnhookEvent("round_end",		Event_RoundEnd,		EventHookMode_PostNoCopy);
+		UnhookEvent("round_start",		Event_RoundStart,	EventHookMode_PostNoCopy);
 
 		ResetPlugin();
 	}
@@ -1325,6 +1330,12 @@ void Event_RoundEnd(Event event, const char[] name, bool dontBroadcast)
 	g_bWindsGlow = false;
 	g_bWallsGlow = false;
 	ResetPlugin();
+}
+
+void Event_RoundStart(Event event, const char[] name, bool dontBroadcast)
+{
+	// Config
+	LoadConfig();
 }
 
 
