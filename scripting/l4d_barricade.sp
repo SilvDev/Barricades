@@ -18,7 +18,7 @@
 
 
 
-#define PLUGIN_VERSION 		"1.19"
+#define PLUGIN_VERSION 		"1.20"
 
 /*=======================================================================================
 	Plugin Info:
@@ -31,6 +31,9 @@
 
 ========================================================================================
 	Change Log:
+
+1.20 (28-Oct-2022)
+	- Added optional translations support. Requested by "NoroHime".
 
 1.19 (27-Jun-2022)
 	- Fixed custom spawn locations not loading on round restarts. Thanks to "gongo" for reporting.
@@ -188,7 +191,7 @@ enum
 ConVar g_hCvarAllow, g_hCvarMPGameMode, g_hCvarModes, g_hCvarModesOff, g_hCvarModesTog, g_hCvarDamageC, g_hCvarDamageI, g_hCvarDamageS, g_hCvarDamageT, g_hCvarFlags, g_hCvarHealth, g_hCvarKeys, g_hCvarRange, g_hCvarTime, g_hCvarTimePress, g_hCvarTimeWait, g_hCvarType, g_hCvarVoca;
 int g_iCvarDamageC, g_iCvarDamageI, g_iCvarDamageS, g_iCvarDamageT, g_iCvarFlags, g_iCvarHealth, g_iCvarKeys, g_iCvarTime, g_iCvarType, g_iCvarVoca;
 float g_fCvarRange, g_fCvarTimeWait, g_fCvarTimePress;
-bool g_bCvarAllow, g_bMapStarted, g_bLeft4Dead2, g_bDoubleDoorFix, g_bDoubleDoorMap, g_bCustomData, g_bDoorsGlow, g_bWallsGlow, g_bWindsGlow;
+bool g_bCvarAllow, g_bMapStarted, g_bLeft4Dead2, g_bTranslation, g_bDoubleDoorFix, g_bDoubleDoorMap, g_bCustomData, g_bDoorsGlow, g_bWallsGlow, g_bWindsGlow;
 char g_sMod[4];
 
 ArrayList g_hBreakable;
@@ -296,6 +299,17 @@ public void OnAllPluginsLoaded()
 
 public void OnPluginStart()
 {
+	// Translations
+	char sPath[PLATFORM_MAX_PATH];
+	BuildPath(Path_SM, sPath, PLATFORM_MAX_PATH, "translations/barricade.phrases.txt");
+	if( FileExists(sPath) )
+	{
+		LoadTranslations("barricade.phrases");
+		g_bTranslation = true;
+	} else {
+		g_bTranslation = false;
+	}
+
 	// Cvars
 	g_hCvarAllow =		CreateConVar(	"l4d_barricade_allow",				"1",				"0=Plugin off, 1=Plugin on.", CVAR_FLAGS );
 	g_hCvarModes =		CreateConVar(	"l4d_barricade_modes",				"",					"Turn on the plugin in these game modes, separate by commas (no spaces). (Empty = all).", CVAR_FLAGS );
@@ -1677,6 +1691,9 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 					{
 						g_fPressing[client] = GetGameTime() + g_iCvarTime;
 						g_iPressing[client] = index;
+
+						static char sTemp[64];
+
 						if( g_bLeft4Dead2 )
 						{
 							RemoveButton(client);
@@ -1690,7 +1707,6 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 							}
 
 							// L4D2 progress bar, with custom text
-							static char sTemp[4];
 							int button = CreateEntityByName("func_button_timed");
 							DispatchKeyValueVector(button, "origin", g_vPos[index]);
 							DispatchKeyValue(button, "model", g_sMod); // Required to make text display
@@ -1699,8 +1715,21 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 							DispatchKeyValue(button, "solid", "0");
 							DispatchKeyValue(button, "auto_disable", "1");
 							DispatchKeyValue(button, "use_time", sTemp);
-							DispatchKeyValue(button, "use_string", "BARRICADE");
-							DispatchKeyValue(button, "use_sub_string", "Building plank...");
+
+							if( g_bTranslation )
+							{
+								FormatEx(sTemp, sizeof(sTemp), "%T", "L4D2_Title", client);
+								DispatchKeyValue(button, "use_string", sTemp);
+
+								FormatEx(sTemp, sizeof(sTemp), "%T", "L4D2_Text", client);
+								DispatchKeyValue(button, "use_sub_string", sTemp);
+							}
+							else
+							{
+								DispatchKeyValue(button, "use_string", "BARRICADE");
+								DispatchKeyValue(button, "use_sub_string", "Building plank...");
+							}
+
 							DispatchSpawn(button);
 
 							SetEntProp(button, Prop_Send, "m_nSolidType", 0);
@@ -1714,7 +1743,16 @@ public Action OnPlayerRunCmd(int client, int &buttons, int &impulse, float vel[3
 						}
 						else
 						{
-							SetEntPropString(client, Prop_Send, "m_progressBarText", "BUILDING BARRICADE...");
+							if( g_bTranslation )
+							{
+								FormatEx(sTemp, sizeof(sTemp), "%T", "L4D1_Text", client);
+								SetEntPropString(client, Prop_Send, "m_progressBarText", sTemp);
+							}
+							else
+							{
+								SetEntPropString(client, Prop_Send, "m_progressBarText", "BUILDING BARRICADE...");
+							}
+
 							SetEntPropFloat(client, Prop_Send, "m_flProgressBarStartTime", GetGameTime());
 							SetEntProp(client, Prop_Send, "m_iProgressBarDuration", g_iCvarTime);
 						}
